@@ -1,7 +1,7 @@
 # CFS Invoice to Logisys User Guide
 
 ## Introduction
-The **CFS Invoice Extractor** is an automated desktop application designed for operations and data entry teams. It scans physical CFS invoices (PDFs), intelligently extracts critical accounting data (Invoice Number, Date, Amount, Vendor Name), and links them against your daily Job Registry to build import narrations. Once verified, the tool generates a ready-to-upload Logisys CSV file.
+The **CFS Invoice Extractor** is an automated desktop application designed for accounts team. It scans physical CFS invoices (PDFs), intelligently extracts critical accounting data (Invoice Number, Date, Amount, Vendor Name), and links them against your daily Job Registry to build import narrations. Once verified, the tool generates a ready-to-upload Logisys CSV file.
 
 ## How to Use
 
