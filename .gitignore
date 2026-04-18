@@ -1,0 +1,13 @@
+venv/
+__pycache__/
+*.pyc
+.env
+dist/
+build/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+CSV Output/
+*.pdf
+scratch_*.py
