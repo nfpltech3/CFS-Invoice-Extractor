@@ -16,14 +16,7 @@ from PIL import Image, ImageTk
 import pdfplumber
 import fitz  # PyMuPDF
 import openpyxl
-import pytesseract
 from dotenv import load_dotenv
-
-# Windows: set Tesseract path if not in system PATH
-if sys.platform == 'win32':
-    tesseract_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-    if os.path.exists(tesseract_path):
-        pytesseract.pytesseract.tesseract_cmd = tesseract_path
 
 from google import genai
 from google.genai import types
@@ -36,10 +29,6 @@ load_dotenv()
 # ---------------------------------------------------------
 # API KEY ROTATION
 # ---------------------------------------------------------
-
-class AllKeysExhaustedError(Exception):
-    """Raised when every API key in the pool has hit its daily quota."""
-    pass
 
 # Parse comma-separated keys from .env
 _raw_keys = os.environ.get("GEMINI_API_KEY", "")
@@ -57,17 +46,14 @@ except Exception as e:
 
 
 def rotate_api_key():
-    """Switch to the next API key in the pool. Raises AllKeysExhaustedError if none left."""
+    """Switch to the next API key in the pool. Raises Exception if none left."""
     global CURRENT_KEY_INDEX, gemini_client
     CURRENT_KEY_INDEX += 1
     if CURRENT_KEY_INDEX < len(API_KEY_LIST):
         gemini_client = genai.Client(api_key=API_KEY_LIST[CURRENT_KEY_INDEX])
         print(f"⚠ Rotated to API Key #{CURRENT_KEY_INDEX + 1} of {len(API_KEY_LIST)}")
     else:
-        raise AllKeysExhaustedError(
-            f"All {len(API_KEY_LIST)} API keys have hit their daily quota. "
-            f"Try again tomorrow or add more keys to GEMINI_API_KEY in .env."
-        )
+        raise Exception("All API keys have been exhausted/failed. Check your Gemini API usage.")
 
 # ---------------------------------------------------------
 # CONSTANTS & MAPPINGS
@@ -374,13 +360,15 @@ def find_job_number(hbl_num, boe_num):
 # ---------------------------------------------------------
 
 def extract_invoice_data(pdf_path):
-    """Extract text from PDF using 3-tier approach, then send to Gemini.
-    Returns: (data_dict, pdf_type, pdf_chars)"""
-    print(f"\n{'='*60}")
+    """
+    Extract invoice data using a 2-step approach:
+    Step A: Try pdfplumber to extract text. If >100 chars, send text to Gemini.
+    Step B: If <100 chars (scanned), send PDF pages as IMAGES directly to Gemini.
+    """
     print(f"  Processing: {Path(pdf_path).name}")
     print(f"{'='*60}")
     
-    # TIER 1: Try pdfplumber (text-layer PDFs)
+    # Step A: Try pdfplumber (text-layer PDFs)
     extracted_text = ""
     try:
         with pdfplumber.open(pdf_path) as pdf:
@@ -392,79 +380,25 @@ def extract_invoice_data(pdf_path):
         print(f"pdfplumber failed: {e}")
 
     extracted_text = extracted_text.strip()
-    print(f"  [Tier 1] pdfplumber: {len(extracted_text)} chars")
+    print(f"  [Step A] pdfplumber: {len(extracted_text)} chars")
     
     if len(extracted_text) > 100:
+        print(f"  [Step A] ✓ Sufficient text found → sending TEXT to Gemini")
         pdf_type = "Text-based"
         pdf_chars = len(extracted_text)
         data = call_gemini_extract(text_content=extracted_text)
         return data, pdf_type, pdf_chars
 
-    # TIER 2: Tesseract OCR (scanned PDFs)
-    ocr_text = ""
-    try:
-        doc = fitz.open(pdf_path)
-        for i in range(min(3, len(doc))):  # up to 3 pages
-            page = doc.load_page(i)
-            pix = page.get_pixmap(dpi=300)
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            page_text = pytesseract.image_to_string(img)
-            if page_text:
-                ocr_text += page_text + "\n"
-        doc.close()
-    except Exception as e:
-        print(f"Tesseract OCR failed: {e}")
-
-    ocr_text = ocr_text.strip()
-    print(f"  [Tier 2] Tesseract:  {len(ocr_text)} chars")
-    
-    if len(ocr_text) > 100:
-        ocr_lower = ocr_text.lower()
-
-        # J M Baxi and JWR specific thresholding pass
-        if "baxi" in ocr_lower or "jwr" in ocr_lower:
-            print(f"  [Tier 2] \u2699\ufe0f Light-text vendor detected (Baxi/JWR) \u2014 applying PIL thresholding to extract hidden text")
-            ocr_text = ""
-            try:
-                doc = fitz.open(pdf_path)
-                for i in range(min(3, len(doc))):
-                    page = doc.load_page(i)
-                    pix = page.get_pixmap(dpi=300)
-                    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                    gray = img.convert('L')
-                    bw = gray.point(lambda x: 0 if x < 150 else 255, '1')
-                    page_text = pytesseract.image_to_string(bw)
-                    if page_text:
-                        ocr_text += page_text + "\n"
-                doc.close()
-            except Exception as e:
-                print(f"Baxi OCR threshold pass failed: {e}")
-            ocr_text = ocr_text.strip()
-            print(f"  [Tier 2] Tesseract (Threshold Pass): {len(ocr_text)} chars")
-            ocr_lower = ocr_text.lower()
-
-        # --- VENDOR BYPASS (Option A) ---
-        if "allcargo" in ocr_lower or "jwc" in ocr_lower:
-            print(f"  [Tier 2] \u26a0 Vendor bypass triggered \u2014 skipping Tesseract text")
-            print(f"  [Tier 3] Falling back to Gemini Vision (image mode)")
-            # Fall through to Tier 3
-        else:
-            print(f"  [Tier 2] \u2713 Using Tesseract OCR text \u2192 sending TEXT to Gemini")
-            pdf_type = "Scanned (Tesseract OCR)"
-            pdf_chars = len(ocr_text)
-            data = call_gemini_extract(text_content=ocr_text)
-            return data, pdf_type, pdf_chars
-
-    # TIER 3: Gemini Vision (last resort)
-    print(f"  [Tier 3] \u26a0 Using Gemini Vision \u2192 sending IMAGES to Gemini (higher token cost)")
+    # Step B: Gemini Vision (scanned PDFs)
+    print(f"  [Step B] ⚠ Insufficient text → sending IMAGES directly to Gemini")
     pdf_type = "Scanned (Gemini Vision)"
-    pdf_chars = len(ocr_text) if ocr_text else 0
+    pdf_chars = len(extracted_text) if extracted_text else 0
     data = call_gemini_extract(pdf_path=pdf_path)
     return data, pdf_type, pdf_chars
 
 
 def call_gemini_extract(text_content=None, pdf_path=None):
-    """Call Gemini API for invoice data extraction with retry logic."""
+    """Call Gemini API for invoice data extraction with simple retry logic."""
     if not gemini_client:
         raise Exception("Gemini client not initialized. Check GEMINI_API_KEY in .env file.")
 
@@ -476,16 +410,14 @@ def call_gemini_extract(text_content=None, pdf_path=None):
 
     # Build contents
     if text_content:
-        # Text-based: send prompt + extracted text
         contents = [
             EXTRACTION_PROMPT,
             f"--- INVOICE TEXT START ---\n{text_content}\n--- INVOICE TEXT END ---"
         ]
     elif pdf_path:
-        # Image-based: send prompt + page images as Parts
         doc = fitz.open(pdf_path)
         contents = [EXTRACTION_PROMPT]
-        for i in range(min(3, len(doc))):  # up to 3 pages
+        for i in range(min(3, len(doc))):
             page = doc.load_page(i)
             pix = page.get_pixmap(dpi=300)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
@@ -501,87 +433,59 @@ def call_gemini_extract(text_content=None, pdf_path=None):
     else:
         raise Exception("No content provided for extraction.")
 
-    # Debug: log API mode and key info
     mode = "TEXT" if text_content else "IMAGE"
-    token_estimate = len(text_content) // 4 if text_content else "~10,000+ (images)"
-    print(f"  [API] Mode: {mode} | Estimated tokens: {token_estimate}")
-    print(f"  [API] Using Key #{CURRENT_KEY_INDEX + 1} of {len(API_KEY_LIST)}")
-
-    # Smart retry with API key rotation
-    # Strategy: 3 retries per key on flash, then 1 attempt on flash-lite,
-    # then rotate to next key. Classifies errors to avoid wasting time.
-    max_retries_per_key = 3
+    print(f"  [API] Mode: {mode}")
+    
+    max_retries = 3
     attempt = 0
-    model_name = "gemini-2.5-flash"
-    MAX_TOTAL_ATTEMPTS = 15  # absolute safety cap
-    total_attempts = 0
-
-    while total_attempts < MAX_TOTAL_ATTEMPTS:
-        total_attempts += 1
-        print(f"  [API] Attempt {attempt + 1} → {model_name} (Key #{CURRENT_KEY_INDEX + 1})")
+    
+    while attempt < max_retries:
+        print(f"  [API] Attempt {attempt + 1} (Key #{CURRENT_KEY_INDEX + 1})")
         try:
             response = gemini_client.models.generate_content(
-                model=model_name,
+                model="gemini-2.5-flash",
                 contents=contents,
                 config=config,
             )
             json_data = json.loads(response.text)
-            print(f"  [API] ✓ Success on {model_name} (Key #{CURRENT_KEY_INDEX + 1})")
+            print(f"  [API] ✓ Success on gemini-2.5-flash")
             return json_data
-
-        except AllKeysExhaustedError:
-            # Bubble up immediately — _process_thread will catch this
-            raise
 
         except Exception as e:
             err_str = str(e)
-            print(f"  [{model_name}] failed: {err_str[:120]}")
+            print(f"  [API Error]: {err_str[:120]}")
 
-            # --- A) DAILY QUOTA HIT ---
-            # Daily limits won't reset by waiting — rotate to next key
-            if "PerDay" in err_str or ("Quota exceeded" in err_str and "limit: 0" in err_str):
-                print(f"  [API] ❌ DAILY QUOTA HIT on Key #{CURRENT_KEY_INDEX + 1} → rotating...")
-                rotate_api_key()  # raises AllKeysExhaustedError if none left
-                attempt = 0  # fresh key = fresh attempts
-                model_name = "gemini-2.5-flash"
+            # 1. API KEY EXHAUSTED OR QUOTA -> Rotate keys
+            if "PerDay" in err_str or ("Quota" in err_str and "limit: 0" in err_str):
+                print(f"  [API] ❌ Quota exhausted on Key #{CURRENT_KEY_INDEX + 1} → rotating...")
+                rotate_api_key()
+                attempt = 0 # reset attempts for the new key
                 continue
 
-            # --- B) PER-MINUTE THROTTLE ---
-            # Temporary — wait for the exact delay Google tells us
+            # 2. RPM THROTTLE -> Wait
             if "PerMinute" in err_str or "retryDelay" in err_str:
+                wait_time = 15
                 delay_match = re.search(r'retryDelay.*?(\d+)', err_str)
-                wait_time = int(delay_match.group(1)) if delay_match else 15
-                wait_time = min(wait_time, 60)  # cap at 60s
-                print(f"  [API] ⏳ RPM throttle → waiting {wait_time}s (attempt {attempt + 1}/{max_retries_per_key})")
+                if delay_match:
+                    wait_time = int(delay_match.group(1))
+                wait_time = min(wait_time, 60)
+                print(f"  [API] ⏳ RPM throttle → waiting {wait_time}s")
                 time.sleep(wait_time)
                 attempt += 1
+                continue
 
-            # --- C) SERVER BUSY (503) ---
-            elif "503" in err_str or "UNAVAILABLE" in err_str:
-                print(f"  [API] 🔄 Server 503 → waiting 10s (attempt {attempt + 1}/{max_retries_per_key})")
-                time.sleep(10)
+            # 3. SERVER ERROR -> Short wait
+            if "503" in err_str or "UNAVAILABLE" in err_str:
+                print(f"  [API] 🔄 Server busy → waiting 5s")
+                time.sleep(5)
                 attempt += 1
+                continue
 
-            # --- D) OTHER ERROR (bad PDF, parse failure, etc.) ---
-            else:
-                print(f"  [API] ❌ Non-retryable error: {err_str[:80]}")
-                raise  # don't waste retries on non-transient errors
+            # Unhandled errors
+            print(f"  [API] ❌ Non-retryable error")
+            raise
 
-            # Check if we've exhausted retries on this key
-            if attempt >= max_retries_per_key:
-                # Last resort: try flash-lite once before giving up on this key
-                if model_name != "gemini-2.5-flash-lite":
-                    print(f"  Falling back to gemini-2.5-flash-lite...")
-                    model_name = "gemini-2.5-flash-lite"
-                    attempt = 0  # reset counter for the fallback model
-                else:
-                    # flash-lite also exhausted — try rotating key
-                    print(f"  [API] ❌ All retries exhausted on Key #{CURRENT_KEY_INDEX + 1} → rotating...")
-                    rotate_api_key()
-                    attempt = 0
-                    model_name = "gemini-2.5-flash"
-
-    raise Exception(f"Gemini extraction failed: exceeded {MAX_TOTAL_ATTEMPTS} total attempts")
+    raise Exception(f"Gemini extraction failed: exceeded max retries")
 
 
 # ---------------------------------------------------------
@@ -795,13 +699,13 @@ class App(tk.Tk):
         columns = ("Org", "Inv No", "Amount", "Job No", "Flag")
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
         for col in columns:
-            self.tree.heading(col, text=col)
+            self.tree.heading(col, text=col, anchor=tk.CENTER)
             if col == "Flag":
                 self.tree.column(col, width=50, anchor=tk.CENTER)
             elif col == "Amount":
-                self.tree.column(col, width=100, anchor=tk.E)
+                self.tree.column(col, width=100, anchor=tk.CENTER)
             else:
-                self.tree.column(col, width=200, anchor=tk.W)
+                self.tree.column(col, width=200, anchor=tk.CENTER)
 
         # Alternating row colors
         self.tree.tag_configure('oddrow', background='#FFFFFF')
@@ -1064,14 +968,6 @@ class App(tk.Tk):
                     self.after(0, self._add_to_tree,
                               org_name, inv_no, row["Amount"], job_no, flag)
                     print(f"  [Result] \u2713 Inv: {inv_no} | Amt: {round(amount)} | Job: {job_no} | Org: {short_name}")
-
-                except AllKeysExhaustedError as ake:
-                    # All API keys are burned for today \u2014 stop the entire batch
-                    print(f"  [BATCH] \u26d4 All keys exhausted after processing {success_count}/{total} invoices")
-                    self._update_status(f"\u26a0 Stopped: All API keys exhausted for today. {success_count} processed.")
-                    # Enable export so user can still get whatever was processed
-                    self.after(0, lambda: self.btn_export.config(state=tk.NORMAL))
-                    break
 
                 except Exception as ex:
                     error_count += 1
