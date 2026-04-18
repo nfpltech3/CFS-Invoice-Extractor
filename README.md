@@ -1,11 +1,11 @@
 # CFS Invoice Extractor
 
-A desktop application designed to extract structured data from physical CFS invoices using a multi-tiered approach: pdfplumber (text), pytesseract (OCR), and Gemini Vision (AI), with support for automated mapping against a Job Registry.
+A desktop application designed to extract structured data from physical CFS invoices using a fast 2-step approach: pdfplumber (for text-based PDFs) and Gemini Vision (for direct processing of scanned image PDFs). Includes support for automated mapping against a Job Registry.
 
 ## Tech Stack
 - Python 3.14
-- Frameworks/Libraries: Tkinter, PyMuPDF, pdfplumber, pytesseract, Pillow, Google GenAI SDK
-- APIs: Google Gemini API (gemini-2.5-flash / gemini-2.5-flash-lite)
+- Frameworks/Libraries: Tkinter, PyMuPDF, pdfplumber, Pillow, Google GenAI SDK
+- APIs: Google Gemini API (gemini-2.5-flash)
 
 ---
 
@@ -82,7 +82,7 @@ cp .env.example .env
 ```
 
 Add required values:
-- `GEMINI_API_KEY`: Provide a single key or a comma-separated list of keys for automatic rotation to bypass free-tier rate limits.
+- `GEMINI_API_KEY`: Provide your Google Gemini API key (supports comma-separated list of keys if needed).
 
 ---
 
