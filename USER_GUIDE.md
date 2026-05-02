@@ -3,6 +3,24 @@
 ## Introduction
 The **CFS Invoice Extractor** is an automated desktop application designed for accounts team. It scans physical CFS invoices (PDFs), intelligently extracts critical accounting data (Invoice Number, Date, Amount, Vendor Name), and links them against your daily Job Registry to build import narrations. Once verified, the tool generates a ready-to-upload Logisys CSV file.
 
+### Supported Vendors (Native AI Layout Recognition)
+1. Gateway Distriparks
+2. Ameya Logistics
+3. Allcargo Terminals
+4. J M Baxi Ports & Logistics
+5. JWR Logistics
+6. JWC Logistics Park
+7. Ashte Logistics
+8. Seabird Marine Services
+9. Navkar Corporation
+10. Ekaiva Supply Chain
+11. Central Warehousing Corporation (CWC)
+12. Apollo Logisolutions
+13. APM Terminals
+14. Balmer Lawrie & Co
+15. Continental Warehousing Corporation
+16. EFC Logistics
+
 ## How to Use
 
 ### 1. Launching the App

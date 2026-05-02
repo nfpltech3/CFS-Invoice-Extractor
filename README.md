@@ -2,6 +2,25 @@
 
 A desktop application designed to extract structured data from physical CFS invoices using a fast 2-step approach: pdfplumber (for text-based PDFs) and Gemini Vision (for direct processing of scanned image PDFs). Includes support for automated mapping against a Job Registry.
 
+## Supported Vendors
+Currently, the extraction system natively understands the layouts for the following 16 vendors:
+1. Gateway Distriparks
+2. Ameya Logistics
+3. Allcargo Terminals
+4. J M Baxi Ports & Logistics
+5. JWR Logistics
+6. JWC Logistics Park
+7. Ashte Logistics
+8. Seabird Marine Services
+9. Navkar Corporation
+10. Ekaiva Supply Chain
+11. Central Warehousing Corporation (CWC)
+12. Apollo Logisolutions
+13. APM Terminals
+14. Balmer Lawrie & Co
+15. Continental Warehousing Corporation
+16. EFC Logistics
+
 ## Tech Stack
 - Python 3.14
 - Frameworks/Libraries: Tkinter, PyMuPDF, pdfplumber, Pillow, Google GenAI SDK

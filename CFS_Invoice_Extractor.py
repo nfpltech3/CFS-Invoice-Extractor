@@ -79,15 +79,22 @@ EXTRACTION_PROMPT = """You are an expert invoice data extractor for Nagarkot For
 CONTEXT:
 You will receive a CFS invoice — either as extracted text or as a scanned image.
 
-Known vendors: Gateway Distriparks, Ameya Logistics, Allcargo Terminals, J M Baxi Ports & Logistics, JWR Logistics, JWC Logistics Park, Ashte Logistics.
+Known vendors: Gateway, Ameya, Allcargo, J M Baxi, JWR, JWC, Ashte, Seabird, Navkar, Ekaiva, CWC (Central Warehousing), Apollo, APM Terminals, Balmer Lawrie, Continental Warehousing, EFC Logistics.
 
 IMPORTANT: A PDF may contain BOTH a Tax Invoice page AND a Receipt page. Always PRIORITISE the Tax Invoice page for extracting invoice_number, invoice_date, and total_invoice_amount. Use the Receipt page only as a fallback if the Tax Invoice page is missing or illegible.
 
-EXTRACT EXACTLY THESE 6 FIELDS:
+EXTRACT EXACTLY THESE 7 FIELDS:
 
 1. vendor_name
    → The company that ISSUED the invoice. Found in the letterhead, logo, or header at the top.
    → This is the CFS/terminal operator — NOT "Nagarkot Forwarders", NOT the importer/consignee.
+   If the invoice issuer name says "formerly known as" one of the known vendors, return the known vendor name used in the known vendor list.
+
+Example:
+"DP World Multimodal Logistics Private Limited formerly known as Continental Warehousing Corporation"
+→ vendor_name = "Continental Warehousing Corporation"
+
+Reason: Logisys mapping uses the known vendor name, not necessarily the current rebranded legal name.
 
 2. invoice_number
    → The INVOICE number (not the receipt number, not the acknowledgement number).
@@ -101,6 +108,7 @@ EXTRACT EXACTLY THESE 6 FIELDS:
    → Look for labels: "Invoice Date", "Inv Date", "Date" (next to invoice number).
    → Output MUST be in DD-MM-YYYY format. Convert from any source format.
    → If the date includes a time component (e.g., "10-04-2026 13:24"), extract ONLY the date part.
+   → APOLLO INVOICE WARNING: Apollo invoices often display financial years (like "25-26") near the top or inside the invoice number. DO NOT use the financial year as the invoice date year. Always find the specific "Invoice Date" field and extract the correct 4-digit year.
 
 4. hbl_number (House Bill of Lading)
    → This is the PRIMARY field used for matching invoices to jobs.
@@ -111,7 +119,7 @@ EXTRACT EXACTLY THESE 6 FIELDS:
        Reason: when only one BL is present, it is almost always the House BL.
      • If the invoice shows TWO BL numbers (one labeled MBL/MAWB/Master and one labeled HBL/HAWB/House):
        put the House BL in hbl_number and the Master BL in mbl_number.
-   → Extract ONLY the BL number string — not the date that may appear next to it.
+   → Extract the FULL BL number string exactly as printed, including all alphabetic prefixes and suffixes. Do not remove prefixes like BLPL, EGLV, ONEY, MAEU, MEDU, COSU, etc.
 
 5. mbl_number (Master Bill of Lading)
    → This field is ONLY for Master Bill of Lading numbers — numbers labeled EXPLICITLY with words like:
@@ -133,14 +141,28 @@ EXTRACT EXACTLY THESE 6 FIELDS:
      extract the FULL identifier "TEMPTCNU32039" (the primary identifier, not just trailing digits).
      Do NOT extract just "80000" — that's incomplete.
    → Extract ONLY the BOE identifier — never include the BE Date or BGE Date.
-   → COMMON MISTAKE: Don't confuse BE numbers with Master BL numbers. BE numbers are customs document numbers. If you see a 7-digit number labeled "BE No", it belongs in boe_number, NOT in mbl_number.
+   For EFC invoices, BE No is shown in the Operational Details section near BL No.
+Read the full 7-digit BE number carefully.
+Do not drop or rearrange digits.
+Example:
+BE No: 5914814 → boe_number = "5914814"
 
 7. total_invoice_amount
    → The FINAL payable amount — this is the grand total AFTER adding all taxes (GST) and round-off.
-   → This is always the LAST and LARGEST total on the invoice.
-   → Look for labels: "Grand Total", "Total Amount After Tax", "Inv Amt", "Net Amount", "Total Invoice Amount", or simply the final "Total" row.
+   → This is always the last payable invoice total.
+   → Look for labels: "Grand Total", "Total Amount After Tax", "Inv Amt", "Net Amount", "Total Invoice Amount", or final "Total"
    → It MUST include GST. It MUST include round-off if present.
-   → Output as a plain number with up to 2 decimal places. No commas, no currency symbols.
+   → If the numeric Grand Total / Net Amount is faint, blurred, cut off, or not confidently readable, use the amount written in words.
+   → Look for labels like "Rupees in Words", "Amount in Words", "In Words", or "Rs. in Words".
+   → Convert Indian numbering words correctly:
+      - One Lakh = 100,000
+      - Thirty Two Thousand = 32,000
+      - One Hundred One = 101
+      - "One Lakh Thirty Two Thousand One Hundred One Only" = 132101
+   → If both numeric amount and amount in words are present and clearly readable, prefer the Tax Invoice numeric Grand Total.
+   → If Tax Invoice numeric amount is unclear but amount in words is readable, use amount in words.
+   → If Tax Invoice amount in words is unclear but Receipt page has the same invoice reference and amount, use the Receipt amount as fallback.
+   → Output as a plain number with up to 2 decimal places. No commas, no ₹ symbol. Even when using amount in words as the source, return total_invoice_amount as a numeric value only, not text
 
 RULES:
 - If a field is not visible, not legible, or not present: set it to null. NEVER guess or fabricate values.
@@ -151,14 +173,12 @@ RULES:
 
 COMMON MISTAKES TO AVOID:
 - JWC/JWR INVOICES: Confusing the starting uppercase letter "I" with the number "1" in the invoice number (extracting '126000977' instead of the correct 'I26000977'). Watch out for garbled letters like 'izeon' which is actually 'I2600'.
-- BOE numbers are typically 7 digits (e.g., 8451015). A 3-digit number like 992 is NOT a BOE — it's likely a weight or quantity field.
 - BL numbers are typically 10+ characters. Read each digit ONE BY ONE — do not guess or interpolate.
-- "Cargo Weight" is NOT a BOE number. Do not confuse numeric weight fields with BOE numbers.
 - A number labeled "BE No" or "BOE No" is a Bill of Entry number → goes in boe_number, NEVER in mbl_number.
 - An invoice with only ONE bill reference and a BE number has: hbl_number = the BL, mbl_number = null, boe_number = the BE.
 
 CRITICAL LAYOUT NOTE — "Operational Details" section:
-Many CFS invoices (especially Ameya, Allcargo, Gateway) have a TWO-COLUMN table in the "Operational Details" section.
+Many CFS invoices (especially Ameya, Allcargo, Gateway, Apollo, EFC, Seabird) have a TWO-COLUMN table in the "Operational Details" section.
 
 EXAMPLE 1 — Ameya-style layout:
   LEFT COLUMN                    RIGHT COLUMN
@@ -184,10 +204,38 @@ EXAMPLE 2 — Allcargo-style layout (two values in one row):
   WRONG extraction (do NOT do this):
   - mbl_number = "7936934" ❌ (This is a BE number, not an MBL!)
 
+EXAMPLE 3 — Apollo-style Operational Details layout:
+  LEFT TABLE                      RIGHT TABLE
+  BL No:     EGLV158600005479     BL Date: 03-02-2026
+  BE No:     8189782              BE Date: 20-03-2026
+  Vessel:    EVER LIVING          Movement: NORMAL
+  IGM No:    1182686              Line No: 209
+
+  Correct extraction:
+  - hbl_number = "EGLV158600005479"
+  - mbl_number = null
+  - boe_number = "8189782"
+
+Rules:
+- Extract BL No value from the cell immediately to the right of BL No.
+- Extract BE No value from the cell immediately to the right of BE No.
+- BL Date and BE Date are dates; do not use them as BL/BE numbers.
+- IGM No, Line No, Vessel, Movement, and Liner/Agent are not BL/BE numbers.
+
+EXAMPLE 4 — EFC/Seabird-style Operational Details layout:
+  LEFT TABLE                      RIGHT TABLE
+  BL No     BLPLBKK2500652        BL Date     12/11/2025 00:00
+  BE No     5914814               BE Date     25/11/2025 00:00
+  Vessel    X-PRESS ANGLESEY      Movement    RMS
+  IGM No    1163425               Line No     10
+
+  Correct extraction:
+  - hbl_number = "BLPLBKK2500652" (CRITICAL: Do not skip letters like 'PL')
+  - mbl_number = null
+  - boe_number = "5914814" (CRITICAL: Ensure you read the FULL 7 digits exactly as shown, do not skip the first digit)
+
 - "BOE No" and "BOE Date" are on the SAME ROW but DIFFERENT COLUMNS. They are SEPARATE fields.
 - "BOE No" contains the Bill of Entry identifier → put this in boe_number.
-- "BOE Date" contains a DATE → ignore this for boe_number.
-- Do NOT skip BOE No just because BOE Date is next to it.
 - When you see "BE No/BE Date: 7936934__07/03/2026" — the "__" is a visual separator. 7936934 is the BE number, 07/03/2026 is the date.
 """
 
@@ -208,6 +256,19 @@ ORG_MAPPING_RULES = {
     "jwr logistics": ("JWR LOGISTICS PVT LTD", "JWR"),
     "jwc logistics": ("JWC LOGISTICS PARK PVT.LTD.", "JWC"),
     "ashte logistics": ("ASHTE LOGISTICS PVT LTD", "Ashte"),
+    "seabird": ("SEABIRD MARINE SERVICES PVT. LTD", "Seabird"),
+    "navkar": ("NAVKAR CORPORATION LTD", "Navkar"),
+    "ekaiva": ("EKAIVA SUPPLY CHAIN", "Ekaiva"),
+    "cwc": ("CENTRAL WAREHOUSING CORPORATION", "CWC"),
+    "central warehousing": ("CENTRAL WAREHOUSING CORPORATION", "CWC"),
+    "apollo": ("APOLLO LOGISOLUTIONS LIMITED", "Apollo"),
+    "apm": ("APM TERMINALS INDIA PVT LTD", "APM Terminals"),
+    "balmer": ("BALMER LAWRIER & CO LTD", "Balmer Lawrie"),
+    "continental warehousing": ("CONTINENTAL WAREHOUSING CORPORATION", "Continental Warehousing"),
+    "efc logistics": ("EFC LOGISTICS INDIA PVT LTD", "EFC Logistics"),
+    "dp world multimodal logistics": ("CONTINENTAL WAREHOUSING CORPORATION", "Continental Warehousing"),
+    "dp world multimodal": ("CONTINENTAL WAREHOUSING CORPORATION", "Continental Warehousing"),
+    "dp world": ("CONTINENTAL WAREHOUSING CORPORATION", "Continental Warehousing"),
 }
 
 def map_organization(vendor_name):
@@ -875,10 +936,12 @@ class App(tk.Tk):
                     # Fields marked FIXED never change. Fields marked BLANK are for future use.
                     
                     org_branch = "Mumbai"
-                    if short_name in ["Allcargo", "J M Baxi", "Gateway", "JWC"]:
+                    if short_name in ["Allcargo", "J M Baxi", "Gateway", "JWC", "Apollo", "Continental Warehousing", "EFC Logistics"]:
                         org_branch = "Navi Mumbai"
                     elif short_name == "Ashte":
                         org_branch = "Chembur"
+                    elif short_name == "Navkar":
+                        org_branch = "Konsavla"
 
                     row = {
                         # --- Extracted / Computed ---
