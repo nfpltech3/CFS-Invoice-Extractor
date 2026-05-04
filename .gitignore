@@ -11,3 +11,6 @@ Thumbs.db
 CSV Output/
 *.pdf
 scratch_*.py
+.exe
+.spec
+.zip
